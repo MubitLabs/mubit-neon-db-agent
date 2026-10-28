@@ -1,0 +1,20 @@
+{
+  "tenantId": "acme-demo",
+  "logicalDatabaseId": "acme-commerce",
+  "environments": [
+    {
+      "id": "demo-v1",
+      "label": "Acme Commerce, schema v1",
+      "readerUrlEnv": "AGENT_DATABASE_URL_DEMO_V1",
+      "evalUrlEnv": "EVAL_DATABASE_URL_DEMO_V1",
+      "modes": ["baseline", "calibration"]
+    },
+    {
+      "id": "demo-v2",
+      "label": "Acme Commerce, schema v2 (refunds table)",
+      "readerUrlEnv": "AGENT_DATABASE_URL_DEMO_V2",
+      "evalUrlEnv": "EVAL_DATABASE_URL_DEMO_V2",
+      "modes": ["baseline", "calibration"]
+    }
+  ]
+}

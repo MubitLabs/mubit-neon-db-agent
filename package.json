@@ -1,0 +1,41 @@
+{
+  "name": "mubit-neon-db-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A database exploration agent on Neon Postgres and Neon Functions that routes its model calls through Mubit to the Neon AI Gateway, with Mubit runtime calibration and open-weight model preparation.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "tsx src/dev.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "ask": "tsx src/cli.ts ask",
+    "demo:prepare": "tsx src/cli.ts prepare",
+    "demo:migrate": "tsx src/cli.ts migrate",
+    "learning:retry": "tsx src/cli.ts learning-retry",
+    "eval": "tsx src/cli.ts eval",
+    "report": "tsx src/cli.ts report",
+    "verify": "tsx src/cli.ts verify",
+    "build:function": "tsx scripts/build-function.ts",
+    "deploy": "tsx scripts/build-function.ts && tsx scripts/deploy-function.ts",
+    "check-run": "tsx scripts/check-run.ts",
+    "walkthrough": "tsx scripts/walkthrough.ts",
+    "check": "tsx src/cli.ts check"
+  },
+  "dependencies": {
+    "libpg-query": "^18.2.1",
+    "openai": "^7.45.1",
+    "pg": "^8.23.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.12"
+  }
+}
