@@ -1,13 +1,19 @@
 import { defineConfig } from "@neon/config/v1";
+import { FUNCTION_ENV } from "./scripts/function-env.js";
 
 /**
  * The Neon Function and its schedule trigger, applied by `npm run deploy` (`neon deploy --env .env`).
  * - dbagent ships the prebuilt dist/fn (scripts/build-function.ts): the bundle plus the SQL parser's WebAssembly file.
- * - Its settings are read from .env, and MUBIT_API_KEY from the keychain. A missing setting stops the deploy; it is
- *   never sent as an empty value, which would erase the live one.
+ * - Its settings are read from .env, and MUBIT_API_KEY from the keychain. A missing or empty setting stops the
+ *   deploy: an empty value would erase the live one.
  * - learning-deliveries posts to /triggers/deliveries every 15 minutes, and the Function sends any delivery still
  *   pending.
  */
+// `KEY=` in the env file is an empty value. Neon would store it and delete the live setting, so it stops here, whether
+// the deploy runs through `npm run deploy` or a bare `neon deploy --env .env`.
+const empty = FUNCTION_ENV.filter((key) => process.env[key] === "");
+if (empty.length) throw new Error(`empty Function settings: ${empty.join(", ")} (an empty value would delete the live one)`);
+
 export default defineConfig({
   functions: {
     dbagent: {
