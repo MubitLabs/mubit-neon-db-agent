@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { App } from "../src/app.js";
 import { LIMITS, loadConfig, type Config } from "../src/config.js";
@@ -249,5 +250,58 @@ describe.skipIf(!hasDb)("scheduled delivery", () => {
     expect(a.failed + b.failed).toBe(0);
     expect(slow.sent.sort()).toEqual(keys.sort());
     expect((await rows(runId)).map((r) => [r.status, r.attempts])).toEqual([["delivered", 1], ["delivered", 1], ["delivered", 1]]);
+  });
+
+  it("survives a connection that drops while it waits on Mubit, and leaves the row to the next sender", async () => {
+    const ns = namespace();
+    const config = configFor(ns);
+    const { runId, keys } = await queue(config, ns, 1, 5);
+    const uncaught: unknown[] = [];
+    const record = (error: unknown) => uncaught.push(error);
+    process.on("uncaughtException", record);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const slow = mubitStub({ hold: gate });
+    try {
+      const sending = deliverPending(store, slow.client, undefined, { due: { tenantId: config.tenantId, calibrationNamespace: ns } }).then(
+        () => "finished",
+        (error: Error) => error.message,
+      );
+      await vi.waitFor(() => expect(slow.sent).toHaveLength(1), { timeout: 5_000 });
+      // The connection that holds the row drops while the sender waits on Mubit (a restart, or the pooler closing it).
+      const killed = await store.pool.query(
+        `select pg_terminate_backend(l.pid) from pg_locks l join pg_class c on c.oid = l.relation
+         where c.relname = 'learning_deliveries' and l.mode = 'RowShareLock' and l.pid <> pg_backend_pid()`,
+      );
+      expect(killed.rowCount).toBe(1);
+      await new Promise((resolve) => setTimeout(resolve, 300)); // the client sees the close while no query is running
+      release();
+      expect(await sending).toMatch(/connection/i);
+    } finally {
+      release();
+      process.off("uncaughtException", record);
+    }
+    expect(uncaught).toEqual([]);
+    expect(await rows(runId)).toMatchObject([{ status: "pending", attempts: 0 }]);
+    const next = mubitStub();
+    expect(await deliverPending(store, next.client, runId)).toEqual({ delivered: 1, failed: 0 });
+    expect(next.sent).toEqual(keys);
+  });
+
+  it("returns its connection to the pool without the error listener it added", async () => {
+    const ns = namespace();
+    const config = configFor(ns);
+    await queue(config, ns, 2, 5);
+    const listeners: number[] = [];
+    const count = (_error: unknown, client: pg.PoolClient) => listeners.push(client.listenerCount("error"));
+    store.pool.on("release", count);
+    try {
+      expect(await trigger(config, mubitStub().client)).toEqual({ delivered: 2, failed: 0 });
+    } finally {
+      store.pool.off("release", count);
+    }
+    // The pool's own idle listener is the only one left on every connection it gets back.
+    expect(listeners.length).toBeGreaterThan(0);
+    expect(new Set(listeners)).toEqual(new Set([1]));
   });
 });
