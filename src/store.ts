@@ -198,6 +198,11 @@ export function createStore(pool: pg.Pool) {
                and d.created_at + interval '1 minute' * power(2, d.attempts) <= now()`;
       }
       const client = await pool.connect();
+      // pg-pool takes its error listener off a client while it is checked out, so a connection that drops while this
+      // sender waits on Mubit would be an uncaught error and end the isolate. With this listener, the drop only fails
+      // the next query, and the row stays pending for the next sender.
+      const ignoreDrop = () => undefined;
+      client.on("error", ignoreDrop);
       try {
         await client.query("begin");
         const { rows } = await client.query(
@@ -234,6 +239,7 @@ export function createStore(pool: pg.Pool) {
         await client.query("rollback").catch(() => undefined);
         throw error;
       } finally {
+        client.removeListener("error", ignoreDrop);
         client.release();
       }
     },
