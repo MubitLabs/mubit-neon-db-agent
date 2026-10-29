@@ -22,6 +22,9 @@ export const LIMITS = {
   recallTokenBudget: 800,
   maxLessonsPerRun: 3,
   maxBodyBytes: 32 * 1024,
+  maxDeliveriesPerPass: 100,
+  maxDeliveriesPerTrigger: 25,
+  maxDeliveryAttempts: 10,
 } as const;
 
 const RegistrySchema = z.object({

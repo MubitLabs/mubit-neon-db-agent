@@ -30,6 +30,20 @@ export type EventRow = { id: string; run_id: string; sequence: number; kind: str
 
 export type Delivery = { id: string; runId: string; kind: "lesson" | "outcome"; payload: unknown; idempotencyKey: string };
 
+/** Which unsent deliveries a sender takes. */
+export type DeliverySelection = {
+  /** Only this run's deliveries. */
+  runId?: string;
+  /**
+   * The schedule trigger: only the runs of this tenant and calibration namespace, fewer than
+   * LIMITS.maxDeliveryAttempts attempts, and due: a delivery that has failed n times waits until 2^n minutes after it
+   * was queued.
+   */
+  due?: { tenantId: string; calibrationNamespace: string };
+  /** Deliveries this pass already tried. */
+  skip: string[];
+};
+
 export const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
 export function inputHash(input: { environmentId: string; mode: string; question: string }): string {
@@ -169,21 +183,59 @@ export function createStore(pool: pg.Pool) {
       return (await pool.query("select * from agentctl.runs where tenant_id = $1 order by started_at desc limit $2", [tenantId, limit])).rows as RunRow[];
     },
 
-    async pendingDeliveries(limit = 100): Promise<(Delivery & { attempts: number })[]> {
-      const { rows } = await pool.query(
-        "select id, run_id, kind, payload, idempotency_key, attempts from agentctl.learning_deliveries where status <> 'delivered' order by created_at limit $1",
-        [limit],
-      );
-      return rows.map((r) => ({ id: r.id, runId: r.run_id, kind: r.kind, payload: r.payload, idempotencyKey: r.idempotency_key, attempts: r.attempts }));
-    },
-
-    async markDelivery(id: string, ok: boolean, error?: string) {
-      await pool.query(
-        ok
-          ? "update agentctl.learning_deliveries set status = 'delivered', attempts = attempts + 1, delivered_at = now(), last_error = null where id = $1"
-          : "update agentctl.learning_deliveries set status = 'failed', attempts = attempts + 1, last_error = $2 where id = $1",
-        ok ? [id] : [id, (error ?? "").slice(0, 400)],
-      );
+    /**
+     * Sends the oldest unsent delivery that matches and that no other sender holds, and records the result. The row
+     * stays locked (FOR UPDATE SKIP LOCKED) until the result is written, so senders that overlap (a feedback request
+     * and the schedule trigger) never send the same row at once, and a sender that stops releases its row. A failed
+     * send stays pending with one more attempt; at LIMITS.maxDeliveryAttempts it becomes failed. Null: nothing matched.
+     */
+    async sendNextDelivery(select: DeliverySelection, send: (d: Delivery) => Promise<void>): Promise<{ id: string; ok: boolean } | null> {
+      const params: unknown[] = [select.skip, select.runId ?? null];
+      let due = "";
+      if (select.due) {
+        params.push(select.due.tenantId, select.due.calibrationNamespace, LIMITS.maxDeliveryAttempts);
+        due = `and r.tenant_id = $3 and r.scope ->> 'calibrationNamespace' = $4 and d.attempts < $5
+               and d.created_at + interval '1 minute' * power(2, d.attempts) <= now()`;
+      }
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const { rows } = await client.query(
+          `select d.id, d.run_id, d.kind, d.payload, d.idempotency_key
+           from agentctl.learning_deliveries d join agentctl.runs r on r.id = d.run_id
+           where d.status <> 'delivered' and d.id <> all($1::text[]) and ($2::text is null or d.run_id = $2) ${due}
+           order by d.created_at
+           limit 1
+           for update of d skip locked`,
+          params,
+        );
+        const row = rows[0];
+        if (!row) {
+          await client.query("commit");
+          return null;
+        }
+        let error: string | null = null;
+        try {
+          await send({ id: row.id, runId: row.run_id, kind: row.kind, payload: row.payload, idempotencyKey: row.idempotency_key });
+        } catch (e) {
+          error = e instanceof Error ? e.message : String(e);
+        }
+        await client.query(
+          error === null
+            ? "update agentctl.learning_deliveries set status = 'delivered', attempts = attempts + 1, delivered_at = now(), last_error = null where id = $1"
+            : `update agentctl.learning_deliveries
+               set status = case when attempts + 1 >= $3 then 'failed' else 'pending' end, attempts = attempts + 1, last_error = $2
+               where id = $1`,
+          error === null ? [row.id] : [row.id, error.slice(0, 400), LIMITS.maxDeliveryAttempts],
+        );
+        await client.query("commit");
+        return { id: row.id, ok: error === null };
+      } catch (error) {
+        await client.query("rollback").catch(() => undefined);
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     async saveEvaluation(id: string, manifest: unknown, results: unknown) {

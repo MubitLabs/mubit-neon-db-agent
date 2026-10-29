@@ -26,7 +26,9 @@ async function build(): Promise<App> {
   await initSqlPolicy();
   const config = loadConfig();
   if (!config.controlDatabaseUrl) throw new Error("CONTROL_DATABASE_URL (or DATABASE_URL) is not set");
-  const controlPool = poolFor(config.controlDatabaseUrl, 2);
+  // A delivery sender holds a connection while Mubit answers (store.sendNextDelivery). Four leave room for runs while
+  // the trigger and a verdict request each send.
+  const controlPool = poolFor(config.controlDatabaseUrl, 4);
   const store = createStore(controlPool);
   const mubit = createMubitClient(config);
   let caps: Promise<Capabilities> | null = null;

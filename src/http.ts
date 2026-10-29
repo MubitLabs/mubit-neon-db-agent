@@ -1,9 +1,13 @@
 import { timingSafeEqual } from "node:crypto";
+import { parseTriggerDelivery } from "@neon/functions/triggers";
 import { runAgent, RunConflict } from "./agent.js";
 import type { App } from "./app.js";
 import { LIMITS } from "./config.js";
 import { deliverPending, verifyRun } from "./learning.js";
 import { AskInputSchema, FeedbackSchema } from "./types.js";
+
+/** The path the schedule trigger in neon.ts posts to. */
+export const TRIGGER_PATH = "/triggers/deliveries";
 
 /** Requests in flight on this instance; beyond LIMITS.maxConcurrentRuns, POST /runs answers 429. */
 let inFlight = 0;
@@ -45,6 +49,17 @@ export async function handle(request: Request, app: App): Promise<Response> {
   try {
     if (request.method === "GET" && path === "/health") {
       return json(200, { ok: true, service: "mubit-neon-db-agent", environments: app.config.environments.length });
+    }
+    // The schedule trigger's only route. Neon posts it without the bearer token; Neon's proxy strips x-neon-* headers
+    // from client requests, so parseTriggerDelivery's header check proves the delivery. No other route accepts it.
+    if (request.method === "POST" && path === TRIGGER_PATH) {
+      const parsed = await parseTriggerDelivery(request);
+      if (!parsed.ok) return json(parsed.error === "invalid_body" ? 400 : 401, { error: parsed.error });
+      if (parsed.invocation.type !== "schedule") return json(400, { error: "not a schedule delivery" });
+      const due = { tenantId: app.config.tenantId, calibrationNamespace: app.config.calibrationNamespace };
+      const counts = await deliverPending(app.store, app.mubit, undefined, { due });
+      console.log(`[trigger] ${parsed.invocation.trigger.name}: delivered ${counts.delivered}, failed ${counts.failed}`);
+      return json(200, counts);
     }
     if (!authorized(request, app.config.demoAccessToken)) return json(401, { error: "unauthorized" }, { "www-authenticate": "Bearer" });
 
