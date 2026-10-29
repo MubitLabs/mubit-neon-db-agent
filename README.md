@@ -18,6 +18,7 @@ Mubit improves the agent in two ways:
 
 ```
 client ── Bearer DEMO_ACCESS_TOKEN ──▶ Neon Function dbagent (HTTP API, branch agent-control)
+schedule trigger, every minute ──────▶    │  POST /triggers/deliveries: send the deliveries still pending
                                           │  runs, events, deliveries ──▶ control database (agent-control)
                                           │  list_tables / describe_table / query ──▶ demo branch, as agent_reader
                                           │  model calls ──▶ api.mubit.ai/openai/v1 ──▶ Neon AI Gateway ──▶ model
@@ -30,8 +31,9 @@ The Mubit project the agent uses holds a Neon AI Gateway key and no other provid
 
 | File | What it does |
 |---|---|
+| `neon.ts` | The Function, its settings and its schedule trigger, applied by `npm run deploy` |
 | `src/function.ts` | Neon Function entry point: `export default { fetch }` |
-| `src/http.ts` | Bearer auth, request validation, the endpoints |
+| `src/http.ts` | Bearer auth, the trigger route, request validation, the endpoints |
 | `src/agent.ts` | The bounded agent loop |
 | `src/prompt.ts` | Fixed instructions and tools: the stable task Mubit learns from |
 | `src/db.ts`, `src/sqlpolicy.ts` | Catalog tools, query execution, the SQL policy |
@@ -92,8 +94,16 @@ A run becomes verified only through the evaluator's reference check or a reviewe
 - the verified SQL;
 - a refund pre-aggregation rule, when it applies.
 
-No model writes them. Lessons and verdicts are queued in the same transaction as the verdict. A failed delivery stays
-pending for `npm run learning:retry`, and the idempotency keys keep a retry from duplicating anything.
+No model writes them. Lessons and verdicts are queued in the same transaction as the verdict, and the verdict request
+sends them to Mubit, each with an idempotency key. A failed delivery stays pending.
+
+A schedule trigger (Neon Function Trigger, `neon.ts`) runs every minute and sends any delivery still pending:
+- a delivery that has failed n times waits until 2^n minutes after it was queued;
+- after 10 failed attempts it is marked `failed`, and only `npm run learning:retry` sends it;
+- it sends only the deliveries of this deployment's runs: its tenant and calibration namespace.
+
+A delivery is locked while it is sent, so the trigger and a verdict request never send the same one at once. The
+idempotency keys keep a retry from duplicating anything.
 
 ## Data
 
@@ -121,8 +131,10 @@ npm ci
 security add-generic-password -a "$USER" -s mubit-neon-demo-key -w      # the Mubit key, stored in the macOS keychain
 npm run demo:prepare -- --neon --project-id <neon project id> --seed 42  # branches, seed, reader role, migration, control
 npm run check                                                            # model route, tools + JSON output, calibration
-npm run deploy                                                           # build dist/fn and deploy the Function
+npm run deploy                                                           # build dist/fn, apply neon.ts: Function + trigger
 ```
+
+`npm run deploy -- --plan` shows what the deploy would change, and changes nothing.
 
 `demo:prepare` creates four branches:
 - `acme-v1`: the seeded parent;
@@ -144,11 +156,17 @@ npm run dev         # the same HTTP API on http://localhost:8787
 
 ## HTTP API
 
-Every endpoint except `/health` needs `Authorization: Bearer <DEMO_ACCESS_TOKEN>`.
+Every endpoint except `/health` and `/triggers/deliveries` needs `Authorization: Bearer <DEMO_ACCESS_TOKEN>`.
+
+`POST /triggers/deliveries` accepts only the schedule trigger's deliveries, which Neon sends without the bearer token.
+`parseTriggerDelivery` (`@neon/functions/triggers`) requires the `x-neon-trigger-invocation-id` header and the same
+`invocation_id` in the body. Neon's proxy removes `x-neon-*` headers from client requests, so a client cannot send
+one to the deployed Function. Locally, `npm run dev` accepts a tick with that header.
 
 | Endpoint | Does |
 |---|---|
 | `GET /health` | Service status |
+| `POST /triggers/deliveries` | The schedule trigger: sends the pending deliveries → `{delivered, failed}` |
 | `GET /environments` | The databases, their modes, the model and the Mubit route |
 | `POST /runs` | `{environmentId, mode, question, idempotencyKey}` → run id and answer. `mode` is `baseline` or `calibration`. |
 | `GET /runs/{id}` | The run, its ordered events (model replies with Mubit request IDs, tool calls, results) and its deliveries |

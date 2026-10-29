@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { LIMITS } from "./config.js";
 import type { MubitClient } from "./mubit.js";
-import { newId, type Delivery, type EventRow, type RunRow, type Store } from "./store.js";
+import { newId, type Delivery, type DeliverySelection, type EventRow, type RunRow, type Store } from "./store.js";
 import type { Lesson, Outcome, Scope, Verification } from "./types.js";
 
 type StoredScope = Scope & { identifiers?: string[]; excludedLessonIds?: string[] };
@@ -120,21 +120,33 @@ export async function verifyRun(
   return { deliveries, lessons };
 }
 
-/** Sends pending lessons and outcomes. A failure stays pending for `npm run learning:retry`; keys keep it idempotent. */
-export async function deliverPending(store: Store, mubit: MubitClient, onlyRunId?: string): Promise<{ delivered: number; failed: number }> {
+/**
+ * Sends pending lessons and outcomes, each at most once per pass. A failure stays pending; the idempotency keys keep a
+ * retry from duplicating anything, and a row is locked while it is sent, so overlapping senders never send it twice.
+ * - `onlyRunId`: one run's deliveries (the feedback request, `npm run verify`).
+ * - `due`: the schedule trigger. Only this deployment's runs and only deliveries that are due (see DeliverySelection),
+ *   at most LIMITS.maxDeliveriesPerTrigger per tick.
+ * `npm run learning:retry` passes neither and sends every delivery that is not delivered, whatever its attempts.
+ */
+export async function deliverPending(
+  store: Store,
+  mubit: MubitClient,
+  onlyRunId?: string,
+  options: { due?: DeliverySelection["due"] } = {},
+): Promise<{ delivered: number; failed: number }> {
   let delivered = 0;
   let failed = 0;
-  for (const d of await store.pendingDeliveries()) {
-    if (onlyRunId && d.runId !== onlyRunId) continue;
-    try {
+  const skip: string[] = [];
+  const limit = options.due ? LIMITS.maxDeliveriesPerTrigger : LIMITS.maxDeliveriesPerPass;
+  while (skip.length < limit) {
+    const sent = await store.sendNextDelivery({ runId: onlyRunId, due: options.due, skip }, async (d) => {
       if (d.kind === "lesson") await mubit.remember((d.payload as { lesson: Lesson }).lesson, d.idempotencyKey);
       else await mubit.report((d.payload as { outcome: Outcome }).outcome, d.idempotencyKey);
-      await store.markDelivery(d.id, true);
-      delivered += 1;
-    } catch (error) {
-      await store.markDelivery(d.id, false, (error as Error).message);
-      failed += 1;
-    }
+    });
+    if (!sent) break;
+    skip.push(sent.id);
+    if (sent.ok) delivered += 1;
+    else failed += 1;
   }
   return { delivered, failed };
 }
