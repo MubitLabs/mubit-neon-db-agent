@@ -20,7 +20,7 @@ describe("neon.ts", () => {
     expect(fn).toMatchObject({ name: "dbagent", source: "./dist/fn", bundler: "none" });
     expect(Object.keys(fn?.env ?? {}).sort()).toEqual([...FUNCTION_ENV].sort());
     expect(fn?.env?.MUBIT_API_KEY).toBe("value-of-MUBIT_API_KEY");
-    expect(config.triggers).toEqual({ "learning-deliveries": { type: "schedule", function: "dbagent", cron: "* * * * *", functionPath: TRIGGER_PATH } });
+    expect(config.triggers).toEqual({ "learning-deliveries": { type: "schedule", function: "dbagent", cron: "*/15 * * * *", functionPath: TRIGGER_PATH } });
   });
 
   it("refuses a missing setting instead of sending it empty", async () => {

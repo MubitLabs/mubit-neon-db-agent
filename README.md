@@ -18,7 +18,7 @@ Mubit improves the agent in two ways:
 
 ```
 client ── Bearer DEMO_ACCESS_TOKEN ──▶ Neon Function dbagent (HTTP API, branch agent-control)
-schedule trigger, every minute ──────▶    │  POST /triggers/deliveries: send the deliveries still pending
+schedule trigger, every 15 minutes ──▶    │  POST /triggers/deliveries: send the deliveries still pending
                                           │  runs, events, deliveries ──▶ control database (agent-control)
                                           │  list_tables / describe_table / query ──▶ demo branch, as agent_reader
                                           │  model calls ──▶ api.mubit.ai/openai/v1 ──▶ Neon AI Gateway ──▶ model
@@ -97,7 +97,8 @@ A run becomes verified only through the evaluator's reference check or a reviewe
 No model writes them. Lessons and verdicts are queued in the same transaction as the verdict, and the verdict request
 sends them to Mubit, each with an idempotency key. A failed delivery stays pending.
 
-A schedule trigger (Neon Function Trigger, `neon.ts`) runs every minute and sends any delivery still pending:
+A schedule trigger runs every 15 minutes and sends any delivery still pending. It is a Neon Function Trigger, declared
+in `neon.ts`. Its rules:
 - a delivery that has failed n times waits until 2^n minutes after it was queued;
 - after 10 failed attempts it is marked `failed`, and only `npm run learning:retry` sends it;
 - it sends only the deliveries of this deployment's runs: its tenant and calibration namespace.

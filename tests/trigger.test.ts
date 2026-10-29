@@ -176,7 +176,7 @@ describe.skipIf(!hasDb)("scheduled delivery", () => {
     const [failed] = await rows(runId);
     expect(failed).toMatchObject({ status: "pending", attempts: 1 });
     expect(failed!.last_error).toContain("503");
-    // One failure: due 2 minutes after it was queued, so the very next tick leaves it alone.
+    // One failure: due 2 minutes after it was queued, so a tick right away leaves it alone.
     const early = mubitStub();
     expect(await trigger(config, early.client)).toEqual({ delivered: 0, failed: 0 });
     expect(early.sent).toEqual([]);

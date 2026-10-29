@@ -5,7 +5,8 @@ import { defineConfig } from "@neon/config/v1";
  * - dbagent ships the prebuilt dist/fn (scripts/build-function.ts): the bundle plus the SQL parser's WebAssembly file.
  * - Its settings are read from .env, and MUBIT_API_KEY from the keychain. A missing setting stops the deploy; it is
  *   never sent as an empty value, which would erase the live one.
- * - learning-deliveries posts to /triggers/deliveries every minute, and the Function sends any delivery still pending.
+ * - learning-deliveries posts to /triggers/deliveries every 15 minutes, and the Function sends any delivery still
+ *   pending.
  */
 export default defineConfig({
   functions: {
@@ -29,7 +30,7 @@ export default defineConfig({
     "learning-deliveries": {
       type: "schedule",
       function: "dbagent",
-      cron: "* * * * *",
+      cron: "*/15 * * * *",
       functionPath: "/triggers/deliveries",
     },
   },
