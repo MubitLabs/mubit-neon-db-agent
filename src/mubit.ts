@@ -362,6 +362,7 @@ export function createMubitClient(config: Config): MubitClient {
         outcome: verified ? "success" : "failure",
         signal: verified ? 1 : -1,
         rationale: `${outcome.source}: ${outcome.reason ?? outcome.verification} (evidence ${outcome.evidenceIds.join(", ")}; key ${idempotencyKey})`.slice(0, 500),
+        idempotency_key: idempotencyKey, // Mubit applies an outcome once per key, so a resend after a lost reply is harmless
       });
       if (r.status < 200 || r.status >= 300) throw new MubitError(`outcome report answered ${r.status}`, r.status, r.status >= 500 || r.status === 429, r.requestId);
     },
